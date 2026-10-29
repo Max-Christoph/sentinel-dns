@@ -87,6 +87,10 @@ sudo cp config.example.yaml /etc/sentinel-dns/config.yaml
 sudo $EDITOR /etc/sentinel-dns/config.yaml
 ```
 
+Provider secrets belong in an environment file (`/etc/sentinel-dns/env`, mode
+`0640`), not in the YAML: `api_key_env: "OLLAMA_API_KEY"` is read from the
+process environment, and the systemd unit loads that file via `EnvironmentFile=`.
+
 Every key is optional; omitted keys keep the default below.
 
 | Key | Default | Meaning |
@@ -106,7 +110,7 @@ Every key is optional; omitted keys keep the default below.
 | `blocking.ttl` | `300` | TTL of the sinkhole answer |
 | `blocking.min_confidence` | `0.6` | verdicts below this never block |
 | `logging.level` / `logging.format` | `info` / `text` | `debug`,`info`,`warn`,`error`; `text`,`json` |
-| `provider.type` | `heuristic` | `heuristic`, `ollama`, `openai` |
+| `provider.type` | `heuristic` | `heuristic`, `ollama`, `openai`, `systemone` |
 | `provider.timeout` | `20s` | HTTP client timeout |
 
 Run in the foreground while testing:
@@ -144,6 +148,52 @@ provider:
 
 This backend is a baseline, not a classifier: expect false negatives on novel
 telemetry and occasional false positives on names that embed a keyword.
+
+### systemone (Clef decision models, hosted or local)
+
+Clef is a **decision model**, not a chat model: it answers typed questions in a
+single forward pass and returns probabilities. It is served on
+`/v1/systemone`, not `/v1/chat/completions`, so it uses its own provider.
+
+```yaml
+provider:
+  type: systemone
+  timeout: 20s
+  systemone:
+    base_url: "https://ollama.com/v1"   # or http://127.0.0.1:11434 for local Ollama >= 0.35
+    model: "clef:27b"                  # alias "clef:27b-cloud" also works
+    api_key_env: "OLLAMA_API_KEY"
+```
+
+Two questions are sent per domain, both answered in one request:
+
+| Question | Type | Meaning |
+| --- | --- | --- |
+| `tracking` | `noul` | probability that the name is telemetry/analytics/ads/crash/tracking |
+| `category` | `choice` | `telemetry`, `analytics`, `ads`, `crash`, `benign` with probabilities |
+
+Mapping into the decision pipeline:
+
+- `block` = `p(noul) >= 0.5`
+- `confidence` = `max(p, 1-p)` — the certainty of the verdict, so a 0.55
+  probability does not clear the default `min_confidence` of 0.6
+- `reason` = the raw probabilities (`noul p=0.867; category=telemetry (0.491)`),
+  never a generated sentence
+- `category` = the `choice` answer, which is what lands in `device_category`
+
+Measured against `https://ollama.com/v1` (2026-10-29, from a German uplink):
+median **555 ms** per domain, max 623 ms, 161–318 input tokens per request.
+With `workers.pool_size: 3` that keeps up with a home network; the DNS path is
+not affected either way.
+
+A note on accuracy: the model scores by name only. In a local sample
+`app-measurement.com` (0.867), `ssl.google-analytics.com` (0.982) and
+`metrics.vendor.example` (0.924) blocked correctly, `api.github.com` (0.013),
+`cdn.jsdelivr.net` (0.094) and `update.microsoft.com` (0.183) were left alone,
+but `settings-win.data.microsoft.com` scored only 0.459 while its `category`
+said `telemetry` (0.586) — a false negative. Calibrate `blocking.min_confidence`
+against your own labelled domains before trusting it; `clef-flash:9b` is the
+faster, less accurate variant.
 
 ### ollama
 
@@ -195,6 +245,9 @@ provider:
 
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin sentinel-dns
+sudo install -d -m 0750 -o root -g sentinel-dns /etc/sentinel-dns
+printf 'OLLAMA_API_KEY=%s\n' '<key>' | sudo tee /etc/sentinel-dns/env >/dev/null
+sudo chmod 0640 /etc/sentinel-dns/env
 sudo install -m 0644 deploy/sentinel-dns.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now sentinel-dns

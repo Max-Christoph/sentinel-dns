@@ -30,8 +30,9 @@ services:
       net.ipv4.ip_unprivileged_port_start: "0"
 
     environment:
-      # Only used when provider.type is "openai"; leave empty otherwise.
+      # Only used when provider.type is "openai" / "systemone"; leave empty otherwise.
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      OLLAMA_API_KEY: "${OLLAMA_API_KEY:-}"
 
     read_only: true
     tmpfs:

@@ -1,0 +1,207 @@
+package provider
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math"
+	"net/http"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/Max-Christoph/sentinel-dns/internal/config"
+)
+
+// SystemOneProvider talks to a decision model through Ollama's /v1/systemone
+// endpoint (Clef, Clef-flash, Jev, Nimble). These models answer typed
+// questions in one forward pass instead of generating text, so the verdict is
+// a probability, not a parsed sentence.
+type SystemOneProvider struct {
+	baseURL   string
+	model     string
+	apiKey    string
+	client    *http.Client
+	log       *slog.Logger
+	questions map[string]systemOneQuestion
+}
+
+type systemOneQuestion struct {
+	Type         string         `json:"type"`
+	Instructions string         `json:"instructions"`
+	Criteria     map[string]any `json:"criteria,omitempty"`
+}
+
+type systemOneRequest struct {
+	Model     string                       `json:"model"`
+	State     string                       `json:"state"`
+	Questions map[string]systemOneQuestion `json:"questions"`
+}
+
+type systemOneAnswer struct {
+	Type          string             `json:"type"`
+	Noul          *float64           `json:"noul"`
+	Choice        string             `json:"choice"`
+	Confidence    *float64           `json:"confidence"`
+	Probabilities map[string]float64 `json:"probabilities"`
+}
+
+type systemOneResponse struct {
+	Model   string                     `json:"model"`
+	Answers map[string]systemOneAnswer `json:"answers"`
+	Usage   struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	Error any `json:"error"`
+}
+
+const (
+	trackingQuestion = "tracking"
+	categoryQuestion = "category"
+)
+
+// NewSystemOne resolves the API key and builds the provider. The question set
+// is fixed: one noul for the block decision, one choice for the category.
+func NewSystemOne(cfg config.SystemOneConfig, timeout time.Duration, log *slog.Logger) (*SystemOneProvider, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
+	if baseURL == "" {
+		return nil, errors.New("systemone: base_url must not be empty")
+	}
+	if !strings.HasPrefix(baseURL, "http://") && !strings.HasPrefix(baseURL, "https://") {
+		return nil, fmt.Errorf("systemone: base_url %q must start with http:// or https://", baseURL)
+	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		return nil, errors.New("systemone: model must not be empty")
+	}
+	apiKey := strings.TrimSpace(cfg.APIKey)
+	if apiKey == "" && strings.TrimSpace(cfg.APIKeyEnv) != "" {
+		apiKey = strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
+	}
+	if apiKey == "" {
+		return nil, fmt.Errorf("systemone: no API key: set api_key or export %s", firstNonEmpty(cfg.APIKeyEnv, "OLLAMA_API_KEY"))
+	}
+	if log == nil {
+		log = slog.Default()
+	}
+	return &SystemOneProvider{
+		baseURL: baseURL,
+		model:   cfg.Model,
+		apiKey:  apiKey,
+		client:  &http.Client{Timeout: timeout},
+		log:     log,
+		questions: map[string]systemOneQuestion{
+			trackingQuestion: {
+				Type: "noul",
+				Instructions: "Is this DNS name used by device telemetry, analytics, crash reporting, " +
+					"advertising or tracking infrastructure? Judge the name itself. Answer false for mail, " +
+					"software updates, CDN, payments, login, identity and plain API endpoints.",
+			},
+			categoryQuestion: {
+				Type:         "choice",
+				Instructions: "Which kind of host is this DNS name?",
+				Criteria: map[string]any{
+					"telemetry": nil,
+					"analytics": nil,
+					"ads":       nil,
+					"crash":     nil,
+					"benign":    "mail, updates, CDN, payments, login, identity, plain API",
+				},
+			},
+		},
+	}, nil
+}
+
+// Name implements the optional named-provider interface.
+func (s *SystemOneProvider) Name() string { return "systemone" }
+
+// Classify asks both questions in a single request. Block is the majority
+// verdict of the noul probability; Confidence is the certainty of that
+// verdict (max(p, 1-p)), so a 0.55 probability does not clear the default
+// min_confidence of 0.6.
+func (s *SystemOneProvider) Classify(ctx context.Context, req DecisionRequest) (*DecisionResponse, error) {
+	domain := normalizeDomain(req.Domain)
+	if domain == "" {
+		return nil, ErrUnavailable
+	}
+	state := "DNS name: " + domain
+	if ip := strings.TrimSpace(req.ClientIP); ip != "" {
+		state += "\nQuerying client: " + ip
+	}
+	payload := systemOneRequest{Model: s.model, State: state, Questions: s.questions}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("systemone: encode request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+"/systemone", bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("systemone: build request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+s.apiKey)
+
+	resp, err := s.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("%w: systemone: %v", ErrUnavailable, err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("%w: systemone: read body: %v", ErrUnavailable, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("%w: systemone: status %d: %s", ErrUnavailable, resp.StatusCode, truncate(strings.TrimSpace(string(raw)), 200))
+	}
+
+	var out systemOneResponse
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("%w: systemone: decode response: %v", ErrUnavailable, err)
+	}
+	tracking, ok := out.Answers[trackingQuestion]
+	if !ok || tracking.Noul == nil {
+		return nil, fmt.Errorf("%w: systemone: response has no %q answer", ErrUnavailable, trackingQuestion)
+	}
+	p := clampProbability(*tracking.Noul)
+
+	block := p >= 0.5
+	confidence := math.Max(p, 1-p)
+
+	reason := fmt.Sprintf("noul p=%.3f", p)
+	category := "unknown"
+	if answer, ok := out.Answers[categoryQuestion]; ok && answer.Choice != "" {
+		category = answer.Choice
+		if q, ok := answer.Probabilities[category]; ok {
+			reason += fmt.Sprintf("; category=%s (%.3f)", category, clampProbability(q))
+		} else {
+			reason += "; category=" + category
+		}
+	}
+
+	s.log.Debug("systemone verdict", "domain", domain, "block", block, "p", p,
+		"input_tokens", out.Usage.InputTokens)
+	return &DecisionResponse{
+		Block:      block,
+		Confidence: confidence,
+		Reason:     reason,
+		Category:   category,
+	}, nil
+}
+
+func clampProbability(p float64) float64 {
+	switch {
+	case math.IsNaN(p), p < 0:
+		return 0
+	case p > 1:
+		return 1
+	default:
+		return p
+	}
+}
+
+var _ DecisionProvider = (*SystemOneProvider)(nil)

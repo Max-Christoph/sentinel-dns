@@ -9,6 +9,8 @@ Type=simple
 User=sentinel-dns
 Group=sentinel-dns
 ExecStart=/usr/local/bin/sentineld -config /etc/sentinel-dns/config.yaml
+# Provider keys (e.g. OLLAMA_API_KEY=...) live here, mode 0640 root:sentinel-dns.
+EnvironmentFile=-/etc/sentinel-dns/env
 Restart=on-failure
 RestartSec=5s
 

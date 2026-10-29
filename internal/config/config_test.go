@@ -118,4 +118,17 @@ func TestValidateProviderSpecifics(t *testing.T) {
 	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "provider.openai.base_url") {
 		t.Fatalf("want missing base_url error, got %v", err)
 	}
+
+	cfg = Default()
+	cfg.Provider.Type = "systemone"
+	cfg.Provider.SystemOne.Model = ""
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "provider.systemone.model") {
+		t.Fatalf("want missing model error, got %v", err)
+	}
+
+	cfg = Default()
+	cfg.Provider.Type = "systemone"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("systemone defaults must validate, got %v", err)
+	}
 }

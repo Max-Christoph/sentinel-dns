@@ -92,6 +92,7 @@ type ProviderConfig struct {
 	Timeout   Duration        `yaml:"timeout"`
 	Ollama    OllamaConfig    `yaml:"ollama"`
 	OpenAI    OpenAIConfig    `yaml:"openai"`
+	SystemOne SystemOneConfig `yaml:"systemone"`
 	Heuristic HeuristicConfig `yaml:"heuristic"`
 }
 
@@ -112,6 +113,16 @@ type OpenAIConfig struct {
 	JSONMode    bool              `yaml:"json_mode"`
 	Temperature float64           `yaml:"temperature"`
 	Headers     map[string]string `yaml:"headers"`
+}
+
+// SystemOneConfig targets a decision model served through Ollama's
+// /v1/systemone endpoint (Clef, Clef-flash, Jev). Unlike chat models these
+// answer typed questions and return probabilities.
+type SystemOneConfig struct {
+	BaseURL   string `yaml:"base_url"`
+	Model     string `yaml:"model"`
+	APIKey    string `yaml:"api_key"`
+	APIKeyEnv string `yaml:"api_key_env"`
 }
 
 // HeuristicConfig configures the zero-AI fallback provider.
@@ -168,6 +179,11 @@ func Default() Config {
 				APIKeyEnv:   "OPENAI_API_KEY",
 				JSONMode:    true,
 				Temperature: 0,
+			},
+			SystemOne: SystemOneConfig{
+				BaseURL:   "https://ollama.com/v1",
+				Model:     "clef:27b",
+				APIKeyEnv: "OLLAMA_API_KEY",
 			},
 		},
 		Blocking: BlockingConfig{
@@ -258,8 +274,15 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.Provider.OpenAI.Model) == "" {
 			errs = append(errs, errors.New("provider.openai.model must not be empty"))
 		}
+	case "systemone":
+		if strings.TrimSpace(c.Provider.SystemOne.BaseURL) == "" {
+			errs = append(errs, errors.New("provider.systemone.base_url must not be empty"))
+		}
+		if strings.TrimSpace(c.Provider.SystemOne.Model) == "" {
+			errs = append(errs, errors.New("provider.systemone.model must not be empty"))
+		}
 	default:
-		errs = append(errs, fmt.Errorf("provider.type %q must be one of heuristic, ollama, openai", c.Provider.Type))
+		errs = append(errs, fmt.Errorf("provider.type %q must be one of heuristic, ollama, openai, systemone", c.Provider.Type))
 	}
 	if c.Provider.Timeout.Std() <= 0 {
 		errs = append(errs, errors.New("provider.timeout must be positive"))

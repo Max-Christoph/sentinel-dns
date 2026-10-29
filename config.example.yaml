@@ -38,7 +38,7 @@ logging:
   format: "text"         # text | json
 
 provider:
-  type: "heuristic"      # heuristic | ollama | openai
+  type: "heuristic"      # heuristic | ollama | openai | systemone
   timeout: "20s"
 
   # --- type: heuristic -----------------------------------------------------
@@ -51,6 +51,15 @@ provider:
     model: "d1"
     temperature: 0.1
     num_predict: 128
+
+  # --- type: systemone (decision models: Clef, Clef-flash, Jev) -----------
+  # Clef is not a chat model: it answers typed questions on /v1/systemone and
+  # returns probabilities. Works against Ollama Cloud or a local Ollama >= 0.35.
+  systemone:
+    base_url: "https://ollama.com/v1"
+    model: "clef:27b"            # alias "clef:27b-cloud" also works
+    api_key: ""                  # prefer api_key_env
+    api_key_env: "OLLAMA_API_KEY"
 
   # --- type: openai (OpenAI, Cloudflare Workers AI, vLLM, llama.cpp) ------
   openai:
