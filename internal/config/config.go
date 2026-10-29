@@ -152,6 +152,10 @@ type BlockingConfig struct {
 	// here because a false positive on a core endpoint looks like a broken
 	// internet connection, not like a blocked tracker.
 	Allowlist []string `yaml:"allowlist"`
+	// FilterAAAA answers every AAAA query with an empty NOERROR. Use it on
+	// networks where the router advertises IPv6 without providing a working
+	// upstream: clients then stop waiting on unreachable AAAA addresses.
+	FilterAAAA bool `yaml:"filter_aaaa"`
 }
 
 // LoggingConfig configures slog.

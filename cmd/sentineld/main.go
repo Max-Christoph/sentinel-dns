@@ -225,6 +225,7 @@ func run() error {
 		TTL:            cfg.Blocking.TTL,
 		ForwardTimeout: cfg.Upstream.Timeout.Std()*time.Duration(len(cfg.Upstream.Addresses)) + time.Second,
 		Allowlist:      cfg.Blocking.Allowlist,
+		FilterAAAA:     cfg.Blocking.FilterAAAA,
 		Logger:         log,
 	})
 	if err != nil {

@@ -28,6 +28,7 @@ type Options struct {
 	TTL            uint32
 	ForwardTimeout time.Duration
 	Allowlist      []string
+	FilterAAAA     bool
 	Logger         *slog.Logger
 }
 
@@ -41,6 +42,7 @@ type Server struct {
 	ttl            uint32
 	forwardTimeout time.Duration
 	allowlist      []string
+	filterAAAA     bool
 	log            *slog.Logger
 
 	queries          atomic.Uint64
@@ -51,6 +53,7 @@ type Server struct {
 	enqueueRejected  atomic.Uint64
 	writeErrors      atomic.Uint64
 	allowlisted      atomic.Uint64
+	filteredAAAA     atomic.Uint64
 }
 
 // Snapshot is a consistent-ish view of the DNS counters.
@@ -63,6 +66,7 @@ type Snapshot struct {
 	EnqueueRejected  uint64 `json:"enqueue_rejected"`
 	WriteErrors      uint64 `json:"write_errors"`
 	Allowlisted      uint64 `json:"allowlisted"`
+	FilteredAAAA     uint64 `json:"filtered_aaaa"`
 }
 
 // New validates the wiring and returns the handler.
@@ -96,6 +100,7 @@ func New(opts Options) (*Server, error) {
 	}
 	return &Server{
 		allowlist:      allow,
+		filterAAAA:     opts.FilterAAAA,
 		cache:          opts.Cache,
 		forwarder:      opts.Forwarder,
 		submit:         opts.Submit,
@@ -120,6 +125,17 @@ func (s *Server) ServeDNS(w mdns.ResponseWriter, req *mdns.Msg) {
 	onlyAddress := q.Qclass == mdns.ClassINET && (q.Qtype == mdns.TypeA || q.Qtype == mdns.TypeAAAA)
 	if domain == "" || !onlyAddress {
 		s.forward(w, req)
+		return
+	}
+
+	// AAAA filtering: answer "no IPv6 address here" so the client uses IPv4
+	// immediately instead of timing out on an unreachable IPv6 path.
+	if s.filterAAAA && q.Qtype == mdns.TypeAAAA {
+		s.filteredAAAA.Add(1)
+		resp := new(mdns.Msg)
+		resp.SetReply(req)
+		resp.RecursionAvailable = true
+		s.write(w, req, resp)
 		return
 	}
 
@@ -229,6 +245,7 @@ func (s *Server) Stats() Snapshot {
 		EnqueueRejected:  s.enqueueRejected.Load(),
 		WriteErrors:      s.writeErrors.Load(),
 		Allowlisted:      s.allowlisted.Load(),
+		FilteredAAAA:     s.filteredAAAA.Load(),
 	}
 }
 

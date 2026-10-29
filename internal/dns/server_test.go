@@ -318,6 +318,46 @@ func TestBlockedResponseCarriesEDNS(t *testing.T) {
 	}
 }
 
+func TestFilterAAAAAnswersEmpty(t *testing.T) {
+	t.Parallel()
+	cache := NewCache(4)
+	opts := Options{
+		Cache: cache, Forwarder: &stubForwarder{},
+		IPv4: net.ParseIP("0.0.0.0"), IPv6: net.ParseIP("::"), TTL: 300,
+		ForwardTimeout: time.Second, FilterAAAA: true,
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	srv, err := New(opts)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	w := &captureWriter{remote: &net.UDPAddr{IP: net.ParseIP("10.0.0.7"), Port: 5555}}
+	srv.ServeDNS(w, query("www.google.com", mdns.TypeAAAA))
+
+	if w.msg == nil {
+		t.Fatal("no response")
+	}
+	if w.msg.Rcode != mdns.RcodeSuccess {
+		t.Fatalf("rcode = %v, want NOERROR", w.msg.Rcode)
+	}
+	if len(w.msg.Answer) != 0 {
+		t.Fatalf("answers = %d, want an empty NOERROR", len(w.msg.Answer))
+	}
+	if got := opts.Forwarder.(*stubForwarder).callCount(); got != 0 {
+		t.Fatalf("AAAA query was forwarded (%d calls)", got)
+	}
+	if srv.Stats().FilteredAAAA != 1 {
+		t.Errorf("filtered_aaaa counter = %d, want 1", srv.Stats().FilteredAAAA)
+	}
+
+	// A queries stay untouched.
+	w2 := &captureWriter{remote: &net.UDPAddr{IP: net.ParseIP("10.0.0.7"), Port: 5555}}
+	srv.ServeDNS(w2, query("www.google.com", mdns.TypeA))
+	if got := opts.Forwarder.(*stubForwarder).callCount(); got != 1 {
+		t.Fatalf("A query was not forwarded (calls=%d)", got)
+	}
+}
+
 func TestNewRejectsInvalidOptions(t *testing.T) {
 	t.Parallel()
 	base := Options{

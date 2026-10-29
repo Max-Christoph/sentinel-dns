@@ -31,6 +31,10 @@ blocking:
   ipv4: "0.0.0.0"
   ipv6: "::"
   ttl: 300               # TTL of the sinkhole answer (seconds)
+  # Answer every AAAA query with an empty NOERROR. Use when the router
+  # advertises IPv6 without a working upstream: clients then use IPv4 at once
+  # instead of timing out on unreachable AAAA addresses.
+  filter_aaaa: false
   min_confidence: 0.6    # a provider verdict blocks only at or above this value
   # Never sinkholed, exact name or subdomain. A false positive on a core
   # endpoint looks like a broken internet connection, not like a blocked tracker.

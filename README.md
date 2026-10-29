@@ -112,6 +112,7 @@ Every key is optional; omitted keys keep the default below.
 | `logging.level` / `logging.format` | `info` / `text` | `debug`,`info`,`warn`,`error`; `text`,`json` |
 | `provider.type` | `heuristic` | `heuristic`, `ollama`, `openai`, `systemone` |
 | `blocking.category_min_probability` | `0.7` | a confident category label may block even when the yes/no question hesitates |
+| `blocking.filter_aaaa` | `false` | answer AAAA with an empty NOERROR (for LANs with broken IPv6) |
 | `blocking.allowlist` | vendor infrastructure (Google, Microsoft NCSI, captive portals, OCSP) | exact name or subdomain, never sinkholed |
 | `provider.systemone.enrich_category` | `true` | second, category-only call for blocked domains (systemone, `questions: tracking`) |
 | `provider.timeout` | `20s` | HTTP client timeout |
