@@ -1,0 +1,63 @@
+# sentinel-dns – example configuration
+#
+# All keys are optional; the defaults below match `config.Default()`.
+# Durations use Go syntax: "300ms", "2s", "1m30s".
+
+listen:
+  udp: "0.0.0.0:53"
+  tcp: "0.0.0.0:53"        # empty string disables the TCP listener
+
+upstream:
+  # Tried in order; the first healthy resolver wins.
+  addresses:
+    - "9.9.9.9:53"
+    - "149.112.112.112:53"
+  timeout: "2s"           # per attempt, per resolver
+
+cache:
+  blocked_ttl: "300s"     # how long a block verdict stays hot
+  allowed_ttl: "600s"     # how long an allow verdict suppresses re-classification
+  max_entries: 50000      # 0 = unbounded
+
+database:
+  path: "/var/lib/sentinel-dns/sentinel.db"
+
+workers:
+  pool_size: 3           # 2-4 is the sweet spot on a Pi / RouterOS container
+  queue_size: 1024       # buffered channel; full queue = dropped job, never a stalled client
+  job_timeout: "25s"     # must stay below the provider timeout budget
+
+blocking:
+  ipv4: "0.0.0.0"
+  ipv6: "::"
+  ttl: 300               # TTL of the sinkhole answer (seconds)
+  min_confidence: 0.6    # a provider verdict blocks only at or above this value
+
+logging:
+  level: "info"          # debug | info | warn | error
+  format: "text"         # text | json
+
+provider:
+  type: "heuristic"      # heuristic | ollama | openai
+  timeout: "20s"
+
+  # --- type: heuristic -----------------------------------------------------
+  heuristic:
+    extra_patterns: []   # extra domains, matched as suffix ("vendor.example")
+
+  # --- type: ollama --------------------------------------------------------
+  ollama:
+    endpoint: "http://127.0.0.1:11434"
+    model: "d1"
+    temperature: 0.1
+    num_predict: 128
+
+  # --- type: openai (OpenAI, Cloudflare Workers AI, vLLM, llama.cpp) ------
+  openai:
+    base_url: "https://api.openai.com/v1"
+    model: "gpt-4o-mini"
+    api_key: ""                  # prefer api_key_env over a literal secret
+    api_key_env: "OPENAI_API_KEY"
+    json_mode: true              # response_format: {"type":"json_object"}
+    temperature: 0
+    headers: {}                  # extra headers, e.g. Cloudflare routing hints

@@ -1,0 +1,35 @@
+[Unit]
+Description=sentinel-dns AI-assisted DNS sinkhole
+Documentation=https://github.com/Max-Christoph/sentinel-dns
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sentinel-dns
+Group=sentinel-dns
+ExecStart=/usr/local/bin/sentineld -config /etc/sentinel-dns/config.yaml
+Restart=on-failure
+RestartSec=5s
+
+# Bind :53 as a non-root user, nothing else.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+# The database is the only writable path; the rest of the system is read-only.
+StateDirectory=sentinel-dns
+StateDirectoryMode=0750
+ReadWritePaths=/var/lib/sentinel-dns
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+MemoryMax=256M
+LimitNOFILE=8192
+
+[Install]
+WantedBy=multi-user.target

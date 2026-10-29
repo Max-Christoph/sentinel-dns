@@ -1,0 +1,42 @@
+# sentinel-dns – Docker Compose deployment
+#
+#   cp config.example.yaml config.yaml   # then adjust provider + upstream
+#   mkdir -p data
+#   docker compose up -d --build
+#
+# Point your DHCP DNS option at the Docker host's IP address afterwards.
+
+services:
+  sentinel-dns:
+    build:
+      context: .
+      args:
+        VERSION: "0.1.0"
+    image: sentinel-dns:0.1.0
+    container_name: sentinel-dns
+    restart: unless-stopped
+
+    ports:
+      - "53:53/udp"
+      - "53:53/tcp"
+
+    volumes:
+      - ./config.yaml:/etc/sentinel-dns/config.yaml:ro
+      - ./data:/var/lib/sentinel-dns
+
+    # Needed so the non-root user (65532) may bind port 53 inside the
+    # container's network namespace. Docker >= 20.10 already defaults to this.
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: "0"
+
+    environment:
+      # Only used when provider.type is "openai"; leave empty otherwise.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

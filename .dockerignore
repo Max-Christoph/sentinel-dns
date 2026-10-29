@@ -1,0 +1,10 @@
+.git
+.gitignore
+.github
+data
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+sentineld
+dist

@@ -1,0 +1,17 @@
+# Build output
+/sentineld
+/dist/
+*.test
+*.out
+
+# Runtime data
+/data/
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
