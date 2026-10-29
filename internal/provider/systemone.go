@@ -22,12 +22,14 @@ import (
 // questions in one forward pass instead of generating text, so the verdict is
 // a probability, not a parsed sentence.
 type SystemOneProvider struct {
-	endpoint  string
-	model     string
-	apiKey    string
-	client    *http.Client
-	log       *slog.Logger
-	questions map[string]systemOneQuestion
+	endpoint      string
+	wantsTracking bool
+	wantsCategory bool
+	model         string
+	apiKey        string
+	client        *http.Client
+	log           *slog.Logger
+	questions     map[string]systemOneQuestion
 }
 
 type systemOneQuestion struct {
@@ -94,19 +96,28 @@ func NewSystemOne(cfg config.SystemOneConfig, timeout time.Duration, log *slog.L
 	if log == nil {
 		log = slog.Default()
 	}
-	questions := map[string]systemOneQuestion{
-		trackingQuestion: {
+	mode := cfg.Questions
+	if mode == "" {
+		mode = "tracking" // zero-value config behaves like the default
+	}
+	questions := make(map[string]systemOneQuestion, 2)
+	wantsTracking := mode != "category"
+	wantsCategory := mode != "tracking"
+
+	if wantsTracking {
+		questions[trackingQuestion] = systemOneQuestion{
 			Type: "noul",
 			Instructions: "Does this domain primarily serve tracking, user analytics, ads, crash metrics, " +
 				"or behavioural profiling, including vendor-specific CDNs serving tracking scripts? " +
 				"Answer false for first-party application APIs, multi-tenant content delivery " +
 				"(media/static assets), authentication, and essential OS infrastructure. " +
 				"Judge only the DNS name; no page content is available.",
-		},
+		}
 	}
-	// The choice question is optional: it fills device_category but shifts the
-	// joint tracking score by up to ±0.44 on borderline names.
-	if cfg.Questions == "tracking_category" {
+	// The category question is optional: it fills device_category but shifts the
+	// joint tracking score by up to ±0.44 on borderline names, so the default
+	// keeps it out of the decision request and runs it afterwards.
+	if wantsCategory {
 		questions[categoryQuestion] = systemOneQuestion{
 			Type:         "choice",
 			Instructions: "What is the primary function of this domain?",
@@ -120,12 +131,14 @@ func NewSystemOne(cfg config.SystemOneConfig, timeout time.Duration, log *slog.L
 	}
 
 	return &SystemOneProvider{
-		endpoint:  endpoint,
-		model:     cfg.Model,
-		apiKey:    apiKey,
-		client:    &http.Client{Timeout: timeout},
-		log:       log,
-		questions: questions,
+		endpoint:      endpoint,
+		model:         cfg.Model,
+		apiKey:        apiKey,
+		client:        &http.Client{Timeout: timeout},
+		log:           log,
+		questions:     questions,
+		wantsTracking: wantsTracking,
+		wantsCategory: wantsCategory,
 	}, nil
 }
 
@@ -175,19 +188,28 @@ func (s *SystemOneProvider) Classify(ctx context.Context, req DecisionRequest) (
 	if err := json.Unmarshal(raw, &out); err != nil {
 		return nil, fmt.Errorf("%w: systemone: decode response: %v", ErrUnavailable, err)
 	}
-	tracking, ok := out.Answers[trackingQuestion]
-	if !ok || tracking.Noul == nil {
-		return nil, fmt.Errorf("%w: systemone: response has no %q answer", ErrUnavailable, trackingQuestion)
+	var (
+		block      bool
+		confidence float64
+		reason     string
+	)
+	if s.wantsTracking {
+		tracking, ok := out.Answers[trackingQuestion]
+		if !ok || tracking.Noul == nil {
+			return nil, fmt.Errorf("%w: systemone: response has no %q answer", ErrUnavailable, trackingQuestion)
+		}
+		p := clampProbability(*tracking.Noul)
+		block = p >= 0.5
+		confidence = math.Max(p, 1-p)
+		reason = fmt.Sprintf("noul p=%.3f", p)
 	}
-	p := clampProbability(*tracking.Noul)
-
-	block := p >= 0.5
-	confidence := math.Max(p, 1-p)
-
-	reason := fmt.Sprintf("noul p=%.3f", p)
 	category := "unknown"
 	categoryProb := 0.0
-	if answer, ok := out.Answers[categoryQuestion]; ok && answer.Choice != "" {
+	answer, hasCategory := out.Answers[categoryQuestion]
+	if s.wantsCategory && (!hasCategory || answer.Choice == "") {
+		return nil, fmt.Errorf("%w: systemone: response has no %q answer", ErrUnavailable, categoryQuestion)
+	}
+	if hasCategory && answer.Choice != "" {
 		category = answer.Choice
 		categoryProb = clampProbability(answer.Probabilities[category])
 		if categoryProb > 0 {
@@ -195,9 +217,14 @@ func (s *SystemOneProvider) Classify(ctx context.Context, req DecisionRequest) (
 		} else {
 			reason += "; category=" + category
 		}
+		if !s.wantsTracking {
+			// Category-only mode exists for post-block enrichment.
+			confidence = categoryProb
+		}
 	}
 
-	s.log.Debug("systemone verdict", "domain", domain, "block", block, "p", p,
+	s.log.Debug("systemone verdict", "domain", domain, "block", block,
+		"confidence", confidence, "category", category,
 		"input_tokens", out.Usage.InputTokens)
 	return &DecisionResponse{
 		Block:        block,

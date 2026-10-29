@@ -109,6 +109,25 @@ func (c *Cache) Put(domain string, entry Entry) bool {
 	return true
 }
 
+// UpdateCategory backfills the label of an existing entry and reports whether
+// the domain was present. Blocked state and expiry are untouched: the label is
+// metadata, the decision stands.
+func (c *Cache) UpdateCategory(domain, category string) bool {
+	key := NormalizeName(domain)
+	if key == "" || category == "" {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return false
+	}
+	entry.Category = category
+	c.entries[key] = entry
+	return true
+}
+
 // Delete removes a domain from the cache.
 func (c *Cache) Delete(domain string) {
 	c.mu.Lock()

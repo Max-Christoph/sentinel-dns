@@ -96,6 +96,35 @@ func TestCacheConcurrentAccess(t *testing.T) {
 	}
 }
 
+func TestCacheUpdateCategoryKeepsBlock(t *testing.T) {
+	t.Parallel()
+	now := time.Now()
+	cache := NewCache(4)
+	cache.now = func() time.Time { return now }
+	cache.Put("ads.example", Entry{Blocked: true, Confidence: 0.9, Reason: "noul", Expires: now.Add(time.Minute)})
+
+	if !cache.UpdateCategory("ADS.example", "analytics") {
+		t.Fatal("UpdateCategory missed an existing entry")
+	}
+	entry, ok := cache.Get("ads.example")
+	if !ok {
+		t.Fatal("entry disappeared")
+	}
+	if entry.Category != "analytics" {
+		t.Errorf("category = %q, want analytics", entry.Category)
+	}
+	if !entry.Blocked || entry.Confidence != 0.9 || entry.Reason != "noul" {
+		t.Errorf("category backfill altered the decision: %+v", entry)
+	}
+
+	if cache.UpdateCategory("missing.example", "ads") {
+		t.Error("UpdateCategory reported success for an unknown domain")
+	}
+	if cache.UpdateCategory("ads.example", "") {
+		t.Error("empty category must be rejected")
+	}
+}
+
 func TestNormalizeName(t *testing.T) {
 	t.Parallel()
 	for input, want := range map[string]string{

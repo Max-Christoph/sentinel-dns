@@ -127,8 +127,12 @@ type SystemOneConfig struct {
 	// joint pass, so asking for the category changes the tracking probability:
 	// "tracking" (default) is the measured, well-separated variant;
 	// "tracking_category" also fills device_category, at the cost of noisier
-	// borderline scores.
+	// borderline scores; "category" asks only the label question and is used
+	// for the post-block enrichment call.
 	Questions string `yaml:"questions"`
+	// EnrichCategory runs a second, category-only request for blocked domains
+	// so the first-line decision stays on the well-separated prompt.
+	EnrichCategory bool `yaml:"enrich_category"`
 }
 
 // HeuristicConfig configures the zero-AI fallback provider.
@@ -188,10 +192,11 @@ func Default() Config {
 				Temperature: 0,
 			},
 			SystemOne: SystemOneConfig{
-				BaseURL:   "https://ollama.com/v1",
-				Model:     "clef:27b",
-				APIKeyEnv: "OLLAMA_API_KEY",
-				Questions: "tracking",
+				BaseURL:        "https://ollama.com/v1",
+				Model:          "clef:27b",
+				APIKeyEnv:      "OLLAMA_API_KEY",
+				Questions:      "tracking",
+				EnrichCategory: true,
 			},
 		},
 		Blocking: BlockingConfig{
@@ -291,9 +296,9 @@ func (c Config) Validate() error {
 			errs = append(errs, errors.New("provider.systemone.model must not be empty"))
 		}
 		switch c.Provider.SystemOne.Questions {
-		case "tracking", "tracking_category":
+		case "tracking", "tracking_category", "category":
 		default:
-			errs = append(errs, fmt.Errorf("provider.systemone.questions %q must be tracking or tracking_category", c.Provider.SystemOne.Questions))
+			errs = append(errs, fmt.Errorf("provider.systemone.questions %q must be tracking, tracking_category or category", c.Provider.SystemOne.Questions))
 		}
 	default:
 		errs = append(errs, fmt.Errorf("provider.type %q must be one of heuristic, ollama, openai, systemone", c.Provider.Type))

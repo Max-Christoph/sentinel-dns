@@ -235,6 +235,43 @@ func TestSystemOneTrackingOnlyOmitsCategory(t *testing.T) {
 	}
 }
 
+func TestSystemOneCategoryOnly(t *testing.T) {
+	t.Parallel()
+	var questions []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Questions map[string]json.RawMessage `json:"questions"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for name := range body.Questions {
+			questions = append(questions, name)
+		}
+		_, _ = io.WriteString(w, `{"answers":{"category":{"type":"choice","choice":"ads",`+
+			`"probabilities":{"ads":0.81,"benign":0.19},"confidence":0.62}}}`)
+	}))
+	defer srv.Close()
+
+	p, err := NewSystemOne(config.SystemOneConfig{
+		BaseURL: srv.URL + "/v1", Model: "clef:27b", APIKey: "k", Questions: "category",
+	}, time.Second, discardLogger())
+	if err != nil {
+		t.Fatalf("NewSystemOne: %v", err)
+	}
+	got, err := p.Classify(context.Background(), DecisionRequest{Domain: "pagead2.googlesyndication.com"})
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if len(questions) != 1 || questions[0] != "category" {
+		t.Fatalf("questions = %v, want only [category]", questions)
+	}
+	if got.Category != "ads" || got.CategoryProb != 0.81 {
+		t.Fatalf("unexpected label: %+v", got)
+	}
+	if got.Block {
+		t.Fatal("the enrichment call must never carry a block decision")
+	}
+}
+
 func TestSystemOneAcceptsFullEndpoint(t *testing.T) {
 	t.Parallel()
 	var gotPath string

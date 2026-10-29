@@ -112,6 +112,7 @@ Every key is optional; omitted keys keep the default below.
 | `logging.level` / `logging.format` | `info` / `text` | `debug`,`info`,`warn`,`error`; `text`,`json` |
 | `provider.type` | `heuristic` | `heuristic`, `ollama`, `openai`, `systemone` |
 | `blocking.category_min_probability` | `0.7` | a confident category label may block even when the yes/no question hesitates |
+| `provider.systemone.enrich_category` | `true` | second, category-only call for blocked domains (systemone, `questions: tracking`) |
 | `provider.timeout` | `20s` | HTTP client timeout |
 
 Run in the foreground while testing:
@@ -195,6 +196,25 @@ Clef scores all questions in one joint pass, so the extra question shifts the
 tracking probability by up to ±0.44 on borderline names and adds latency. Measured
 on the same 24-domain tracker set: `tracking` blocks 20, `tracking_category`
 blocks 19 — with a different set of misses.
+
+**Post-block enrichment (`enrich_category: true`, default).** After a domain is
+blocked, a second, category-only request runs on its own single-worker pool and
+backfills `device_category` — the decision request stays on the well-separated
+prompt. The DNS answer and the cache entry are already in place when it starts,
+so nothing waits for it.
+
+- The label is only written when `p(category) >= blocking.min_confidence`;
+  otherwise the column stays empty. An empty cell is honest, a guessed category
+  in a dashboard is not.
+- It never touches `blocked`, `confidence`, `reasoning` or `hit_count`; the
+  original decision stays the audit trail.
+- Measured on the 24-domain tracker set: 20 blocked, 20 enrichment calls, 12 of
+  them produced a label above 0.6 (`analytics` 7, `ads` 4, `telemetry` 2,
+  `benign` 1). Labels arrive 0.6 s after the decision when the queue is empty;
+  under 20 simultaneous hits the single worker needed up to ~11 s, which is
+  irrelevant because nothing blocks on it.
+- `questions: "tracking_category"` makes the enrichment redundant; use one or
+  the other.
 
 **Calibration matters more than wording.** Identical requests are deterministic
 (5/5 identical scores), but every change to the payload — wording, sibling

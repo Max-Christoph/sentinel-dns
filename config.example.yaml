@@ -64,6 +64,8 @@ provider:
     # tracking_category = adds a choice question; fills device_category but shifts
     #                     the joint tracking score by up to ±0.44 on borderline names
     questions: "tracking"
+    # Second, category-only request for blocked domains; backfills device_category.
+    enrich_category: true
 
   # --- type: openai (OpenAI, Cloudflare Workers AI, vLLM, llama.cpp) ------
   openai:

@@ -127,6 +127,42 @@ func TestAllAndStats(t *testing.T) {
 	}
 }
 
+func TestUpdateCategoryKeepsDecision(t *testing.T) {
+	t.Parallel()
+	st := openTestStore(t)
+	ctx := context.Background()
+	if err := st.RecordDecision(ctx, Decision{
+		Domain: "ads.example", Blocked: true, Confidence: 0.91, IsTelemetry: true, Reasoning: "noul p=0.910",
+	}); err != nil {
+		t.Fatalf("RecordDecision: %v", err)
+	}
+
+	updated, err := st.UpdateCategory(ctx, "ads.example", "analytics")
+	if err != nil {
+		t.Fatalf("UpdateCategory: %v", err)
+	}
+	if !updated {
+		t.Fatal("UpdateCategory reported no row")
+	}
+	got, err := st.Get(ctx, "ads.example")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.DeviceCategory != "analytics" {
+		t.Errorf("device_category = %q, want analytics", got.DeviceCategory)
+	}
+	if !got.Blocked || got.Confidence != 0.91 || got.Reasoning != "noul p=0.910" {
+		t.Errorf("decision was modified by the category backfill: %+v", got)
+	}
+	if got.HitCount != 1 {
+		t.Errorf("hit_count = %d, want 1 (enrichment is not a classification)", got.HitCount)
+	}
+
+	if updated, err := st.UpdateCategory(ctx, "missing.example", "ads"); err != nil || updated {
+		t.Fatalf("unknown domain: updated=%v err=%v, want false and no error", updated, err)
+	}
+}
+
 func TestPruneBefore(t *testing.T) {
 	t.Parallel()
 	st := openTestStore(t)

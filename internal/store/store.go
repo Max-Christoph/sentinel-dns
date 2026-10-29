@@ -162,6 +162,26 @@ ON CONFLICT(domain) DO UPDATE SET
 	return nil
 }
 
+// UpdateCategory backfills device_category for an existing decision. It does
+// not touch blocked, confidence, reasoning or hit_count, so the audit trail of
+// the original decision stays intact. Returns false when the domain is unknown.
+func (s *Store) UpdateCategory(ctx context.Context, domain, category string) (bool, error) {
+	if strings.TrimSpace(domain) == "" {
+		return false, errors.New("store: domain must not be empty")
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE decisions SET device_category = ?, updated_at = ? WHERE domain = ?`,
+		category, formatTime(s.now()), domain)
+	if err != nil {
+		return false, fmt.Errorf("store: update category %s: %w", domain, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: update category rows affected: %w", err)
+	}
+	return affected > 0, nil
+}
+
 // All returns every stored decision, ordered by most recently updated. It is
 // used once at startup to warm the in-memory cache.
 func (s *Store) All(ctx context.Context) ([]Decision, error) {

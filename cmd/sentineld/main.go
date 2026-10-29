@@ -103,6 +103,53 @@ func run() error {
 		}
 	}
 
+	// Post-block enrichment: a second, category-only request for blocked
+	// domains. It runs on its own single-worker pool so it can never occupy a
+	// first-line worker, and it only backfills metadata.
+	var enrichPool *queue.Pool
+	if cfg.Provider.Type == "systemone" && cfg.Provider.SystemOne.EnrichCategory &&
+		cfg.Provider.SystemOne.Questions == "tracking" {
+		enrichCfg := cfg.Provider
+		enrichCfg.SystemOne.Questions = "category"
+		enricher, err := provider.New(enrichCfg, log)
+		if err != nil {
+			return err
+		}
+		enrichPool, err = queue.New(queue.Options{
+			Workers:    1,
+			Buffer:     cfg.Workers.QueueSize,
+			JobTimeout: cfg.Workers.JobTimeout.Std(),
+			Classifier: enricher,
+			OnError: func(_ context.Context, job queue.Job, enrichErr error) {
+				log.Debug("category enrichment failed", "domain", job.Domain, "error", enrichErr)
+			},
+			OnResult: func(ctx context.Context, job queue.Job, resp *provider.DecisionResponse) {
+				if resp.Category == "" || resp.Category == "unknown" {
+					return
+				}
+				// A label below the decision threshold is not written: an empty
+				// column is honest, a guessed category in a dashboard is not.
+				if resp.CategoryProb < cfg.Blocking.MinConfidence {
+					log.Debug("category label below threshold, not stored", "domain", job.Domain,
+						"category", resp.Category, "category_probability", resp.CategoryProb)
+					return
+				}
+				if _, err := st.UpdateCategory(ctx, job.Domain, resp.Category); err != nil {
+					log.Warn("store category failed", "domain", job.Domain, "error", err)
+				}
+				cache.UpdateCategory(job.Domain, resp.Category)
+				log.Info("category enriched", "domain", job.Domain,
+					"category", resp.Category, "category_probability", resp.CategoryProb)
+			},
+			Logger: log,
+		})
+		if err != nil {
+			return err
+		}
+		enrichPool.Start()
+		log.Info("post-block category enrichment enabled", "workers", 1)
+	}
+
 	policy := provider.Policy{
 		MinConfidence:          cfg.Blocking.MinConfidence,
 		CategoryMinProbability: cfg.Blocking.CategoryMinProbability,
@@ -140,6 +187,11 @@ func run() error {
 		}
 		if !cache.Put(job.Domain, entry) {
 			log.Debug("cache full, decision not cached", "domain", job.Domain)
+		}
+		if block && enrichPool != nil {
+			if !enrichPool.Submit(queue.Job{Domain: job.Domain}) {
+				log.Debug("enrichment queue full, category skipped", "domain", job.Domain)
+			}
 		}
 		log.Info("classified", "domain", job.Domain, "client_ip", job.ClientIP,
 			"block", block, "confidence", confidence, "decided_by", decision.Reason,
@@ -202,6 +254,11 @@ func run() error {
 	runtime.shutdown(shutdownCtx, log)
 	if err := pool.Stop(shutdownCtx); err != nil {
 		log.Warn("worker pool shutdown", "error", err)
+	}
+	if enrichPool != nil {
+		if err := enrichPool.Stop(shutdownCtx); err != nil {
+			log.Warn("enrichment pool shutdown", "error", err)
+		}
 	}
 	if err := st.Close(); err != nil {
 		log.Error("closing store", "error", err)
