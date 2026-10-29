@@ -44,7 +44,10 @@ func (u *Upstream) Addresses() []string { return append([]string(nil), u.address
 // Timeout returns the per-attempt timeout.
 func (u *Upstream) Timeout() time.Duration { return u.timeout }
 
-// Forward tries every resolver until one answers.
+// Forward tries every resolver until one answers. A UDP attempt that fails to
+// parse is retried over TCP against the same resolver before failing over: a
+// datagram cut at the read buffer parses as a malformed message, and TCP is the
+// only way to get the full answer.
 func (u *Upstream) Forward(ctx context.Context, req *mdns.Msg) (*mdns.Msg, error) {
 	if req == nil {
 		return nil, errors.New("dns: nil query")
@@ -54,8 +57,13 @@ func (u *Upstream) Forward(ctx context.Context, req *mdns.Msg) (*mdns.Msg, error
 		resp, err := u.exchange(ctx, addr, req, "udp")
 		if err != nil {
 			errs = append(errs, fmt.Errorf("udp %s: %w", addr, err))
-			u.log.Debug("upstream attempt failed", "resolver", addr, "network", "udp", "error", err)
-			continue
+			u.log.Debug("upstream udp failed, retrying over tcp", "resolver", addr, "error", err)
+			if tcpResp, tcpErr := u.exchange(ctx, addr, req, "tcp"); tcpErr == nil {
+				resp, err = tcpResp, nil
+			} else {
+				errs = append(errs, fmt.Errorf("tcp %s: %w", addr, tcpErr))
+				continue
+			}
 		}
 		if resp.Truncated {
 			full, tcpErr := u.exchange(ctx, addr, req, "tcp")
@@ -82,7 +90,10 @@ func (u *Upstream) Forward(ctx context.Context, req *mdns.Msg) (*mdns.Msg, error
 func (u *Upstream) exchange(ctx context.Context, addr string, req *mdns.Msg, network string) (*mdns.Msg, error) {
 	attemptCtx, cancel := context.WithTimeout(ctx, u.timeout)
 	defer cancel()
-	client := &mdns.Client{Net: network, Timeout: u.timeout}
+	// 4096 bytes read buffer: the default 512 truncates the datagram mid-record
+	// for domains with many addresses or DNSSEC records, which then fails to
+	// parse ("overflow unpacking uint16") and would turn into SERVFAIL.
+	client := &mdns.Client{Net: network, Timeout: u.timeout, UDPSize: 4096}
 	resp, _, err := client.ExchangeContext(attemptCtx, req.Copy(), addr)
 	if err != nil {
 		return nil, err

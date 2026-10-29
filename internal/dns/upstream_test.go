@@ -119,6 +119,47 @@ func TestUpstreamRetriesOverTCPWhenTruncated(t *testing.T) {
 	}
 }
 
+// TestUpstreamFallsBackToTCPOnMalformedUDP covers the field failure where a
+// datagram larger than the read buffer was cut mid-record: the parse error must
+// trigger a TCP retry instead of a SERVFAIL.
+func TestUpstreamFallsBackToTCPOnMalformedUDP(t *testing.T) {
+	t.Parallel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen tcp: %v", err)
+	}
+	addr := listener.Addr().String()
+	udpConn, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		t.Fatalf("listen udp on %s: %v", addr, err)
+	}
+
+	udpSrv := &mdns.Server{PacketConn: udpConn, Handler: mdns.HandlerFunc(func(w mdns.ResponseWriter, req *mdns.Msg) {
+		// Three bytes: too short to unpack, exactly what a truncated datagram
+		// looks like to the parser.
+		_, _ = w.Write([]byte{0x01, 0x02, 0x03})
+	})}
+	tcpSrv := &mdns.Server{Listener: listener, Handler: answerWith("203.0.113.99")}
+	go func() { _ = udpSrv.ActivateAndServe() }()
+	go func() { _ = tcpSrv.ActivateAndServe() }()
+	t.Cleanup(func() { _ = udpSrv.Shutdown(); _ = tcpSrv.Shutdown() })
+
+	up, err := NewUpstream([]string{addr}, time.Second, testLogger())
+	if err != nil {
+		t.Fatalf("NewUpstream: %v", err)
+	}
+	resp, err := up.Forward(context.Background(), query("www.tagesschau.de", mdns.TypeA))
+	if err != nil {
+		t.Fatalf("Forward: %v (want a TCP retry, not a failure)", err)
+	}
+	if len(resp.Answer) != 1 {
+		t.Fatalf("answers = %d, want 1", len(resp.Answer))
+	}
+	if got := resp.Answer[0].(*mdns.A).A.String(); got != "203.0.113.99" {
+		t.Fatalf("answer = %s, want the TCP answer", got)
+	}
+}
+
 func TestUpstreamAllResolversFail(t *testing.T) {
 	t.Parallel()
 	up, err := NewUpstream([]string{"127.0.0.1:1"}, 300*time.Millisecond, testLogger())
