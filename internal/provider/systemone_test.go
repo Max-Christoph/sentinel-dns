@@ -49,8 +49,13 @@ func systemOneServer(t *testing.T, domain string, tracking float64, choice strin
 			t.Error("tracking question has no instructions")
 		}
 		cat, ok := body.Questions["category"]
-		if !ok || cat.Type != "choice" || len(cat.Criteria) != 5 {
+		if !ok || cat.Type != "choice" || len(cat.Criteria) != 4 {
 			t.Errorf("category question malformed: %+v", cat)
+		}
+		for _, want := range []string{"telemetry", "analytics", "ads", "benign"} {
+			if _, ok := cat.Criteria[want]; !ok {
+				t.Errorf("category criteria missing %q: %+v", want, cat.Criteria)
+			}
 		}
 
 		answers := map[string]any{
@@ -72,7 +77,9 @@ func systemOneServer(t *testing.T, domain string, tracking float64, choice strin
 
 func newTestSystemOne(t *testing.T, url string, timeout time.Duration) *SystemOneProvider {
 	t.Helper()
-	p, err := NewSystemOne(config.SystemOneConfig{BaseURL: url + "/v1", Model: "clef:27b", APIKey: "test-key"}, timeout, discardLogger())
+	p, err := NewSystemOne(config.SystemOneConfig{
+		BaseURL: url + "/v1", Model: "clef:27b", APIKey: "test-key", Questions: "tracking_category",
+	}, timeout, discardLogger())
 	if err != nil {
 		t.Fatalf("NewSystemOne: %v", err)
 	}
@@ -97,6 +104,9 @@ func TestSystemOneClassify(t *testing.T) {
 	}
 	if got.Category != "telemetry" {
 		t.Errorf("category = %q, want telemetry", got.Category)
+	}
+	if got.CategoryProb != 0.88 {
+		t.Errorf("category probability = %v, want 0.88", got.CategoryProb)
 	}
 	if !strings.Contains(got.Reason, "noul p=0.930") || !strings.Contains(got.Reason, "category=telemetry") {
 		t.Errorf("reason does not document the probabilities: %q", got.Reason)
@@ -188,6 +198,40 @@ func TestSystemOneHonoursTimeout(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
 		t.Fatalf("classify blocked for %v", elapsed)
+	}
+}
+
+func TestSystemOneTrackingOnlyOmitsCategory(t *testing.T) {
+	t.Parallel()
+	var questions []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Questions map[string]json.RawMessage `json:"questions"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		for name := range body.Questions {
+			questions = append(questions, name)
+		}
+		_, _ = io.WriteString(w, `{"answers":{"tracking":{"type":"noul","noul":0.93}}}`)
+	}))
+	defer srv.Close()
+
+	p, err := NewSystemOne(config.SystemOneConfig{BaseURL: srv.URL + "/v1", Model: "clef:27b", APIKey: "k"}, time.Second, discardLogger())
+	if err != nil {
+		t.Fatalf("NewSystemOne: %v", err)
+	}
+	got, err := p.Classify(context.Background(), DecisionRequest{Domain: "metrics.vendor.example"})
+	if err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if len(questions) != 1 || questions[0] != "tracking" {
+		t.Fatalf("questions = %v, want only [tracking]", questions)
+	}
+	if !got.Block || got.Confidence != 0.93 {
+		t.Fatalf("unexpected decision: %+v", got)
+	}
+	if got.Category != "unknown" || got.CategoryProb != 0 {
+		t.Fatalf("category must stay empty in tracking-only mode: %+v", got)
 	}
 }
 

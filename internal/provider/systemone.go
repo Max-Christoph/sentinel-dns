@@ -94,31 +94,38 @@ func NewSystemOne(cfg config.SystemOneConfig, timeout time.Duration, log *slog.L
 	if log == nil {
 		log = slog.Default()
 	}
-	return &SystemOneProvider{
-		endpoint: endpoint,
-		model:    cfg.Model,
-		apiKey:   apiKey,
-		client:   &http.Client{Timeout: timeout},
-		log:      log,
-		questions: map[string]systemOneQuestion{
-			trackingQuestion: {
-				Type: "noul",
-				Instructions: "Is this DNS name used by device telemetry, analytics, crash reporting, " +
-					"advertising or tracking infrastructure? Judge the name itself. Answer false for mail, " +
-					"software updates, CDN, payments, login, identity and plain API endpoints.",
-			},
-			categoryQuestion: {
-				Type:         "choice",
-				Instructions: "Which kind of host is this DNS name?",
-				Criteria: map[string]any{
-					"telemetry": nil,
-					"analytics": nil,
-					"ads":       nil,
-					"crash":     nil,
-					"benign":    "mail, updates, CDN, payments, login, identity, plain API",
-				},
-			},
+	questions := map[string]systemOneQuestion{
+		trackingQuestion: {
+			Type: "noul",
+			Instructions: "Does this domain primarily serve tracking, user analytics, ads, crash metrics, " +
+				"or behavioural profiling, including vendor-specific CDNs serving tracking scripts? " +
+				"Answer false for first-party application APIs, multi-tenant content delivery " +
+				"(media/static assets), authentication, and essential OS infrastructure. " +
+				"Judge only the DNS name; no page content is available.",
 		},
+	}
+	// The choice question is optional: it fills device_category but shifts the
+	// joint tracking score by up to ±0.44 on borderline names.
+	if cfg.Questions == "tracking_category" {
+		questions[categoryQuestion] = systemOneQuestion{
+			Type:         "choice",
+			Instructions: "What is the primary function of this domain?",
+			Criteria: map[string]any{
+				"telemetry": "Crash reporting, diagnostics, performance beacons, or device metrics",
+				"analytics": "User tracking, event ingestion, customer data platforms, or behavioral profiling",
+				"ads":       "Ad delivery, attribution, affiliate pixels, or conversion tracking",
+				"benign":    "Core app functionality, static UI assets, generic CDNs, auth, updates, or email",
+			},
+		}
+	}
+
+	return &SystemOneProvider{
+		endpoint:  endpoint,
+		model:     cfg.Model,
+		apiKey:    apiKey,
+		client:    &http.Client{Timeout: timeout},
+		log:       log,
+		questions: questions,
 	}, nil
 }
 
@@ -134,11 +141,10 @@ func (s *SystemOneProvider) Classify(ctx context.Context, req DecisionRequest) (
 	if domain == "" {
 		return nil, ErrUnavailable
 	}
-	state := "DNS name: " + domain
-	if ip := strings.TrimSpace(req.ClientIP); ip != "" {
-		state += "\nQuerying client: " + ip
-	}
-	payload := systemOneRequest{Model: s.model, State: state, Questions: s.questions}
+	// The client IP is deliberately not part of the state: it carries no signal
+	// about the domain, it would leave the network, and it measurably perturbs
+	// the joint score (facebook.net 0.631 vs 0.398 on the same prompt).
+	payload := systemOneRequest{Model: s.model, State: "DNS name: " + domain, Questions: s.questions}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("systemone: encode request: %w", err)
@@ -180,10 +186,12 @@ func (s *SystemOneProvider) Classify(ctx context.Context, req DecisionRequest) (
 
 	reason := fmt.Sprintf("noul p=%.3f", p)
 	category := "unknown"
+	categoryProb := 0.0
 	if answer, ok := out.Answers[categoryQuestion]; ok && answer.Choice != "" {
 		category = answer.Choice
-		if q, ok := answer.Probabilities[category]; ok {
-			reason += fmt.Sprintf("; category=%s (%.3f)", category, clampProbability(q))
+		categoryProb = clampProbability(answer.Probabilities[category])
+		if categoryProb > 0 {
+			reason += fmt.Sprintf("; category=%s (%.3f)", category, categoryProb)
 		} else {
 			reason += "; category=" + category
 		}
@@ -192,10 +200,11 @@ func (s *SystemOneProvider) Classify(ctx context.Context, req DecisionRequest) (
 	s.log.Debug("systemone verdict", "domain", domain, "block", block, "p", p,
 		"input_tokens", out.Usage.InputTokens)
 	return &DecisionResponse{
-		Block:      block,
-		Confidence: confidence,
-		Reason:     reason,
-		Category:   category,
+		Block:        block,
+		Confidence:   confidence,
+		Reason:       reason,
+		Category:     category,
+		CategoryProb: categoryProb,
 	}, nil
 }
 

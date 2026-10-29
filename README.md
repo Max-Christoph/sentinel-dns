@@ -111,6 +111,7 @@ Every key is optional; omitted keys keep the default below.
 | `blocking.min_confidence` | `0.6` | verdicts below this never block |
 | `logging.level` / `logging.format` | `info` / `text` | `debug`,`info`,`warn`,`error`; `text`,`json` |
 | `provider.type` | `heuristic` | `heuristic`, `ollama`, `openai`, `systemone` |
+| `blocking.category_min_probability` | `0.7` | a confident category label may block even when the yes/no question hesitates |
 | `provider.timeout` | `20s` | HTTP client timeout |
 
 Run in the foreground while testing:
@@ -166,37 +167,54 @@ provider:
     base_url: "https://ollama.com/v1/systemone"
     model: "clef:27b"                  # alias "clef:27b-cloud" also works
     api_key_env: "OLLAMA_API_KEY"
+    questions: "tracking"             # or "tracking_category"
 ```
 
-Two questions are sent per domain, both answered in one request:
+The default sends **one** `noul` question per domain:
 
-| Question | Type | Meaning |
-| --- | --- | --- |
-| `tracking` | `noul` | probability that the name is telemetry/analytics/ads/crash/tracking |
-| `category` | `choice` | `telemetry`, `analytics`, `ads`, `crash`, `benign` with probabilities |
+> Does this domain primarily serve tracking, user analytics, ads, crash metrics,
+> or behavioural profiling, including vendor-specific CDNs serving tracking
+> scripts? Answer false for first-party application APIs, multi-tenant content
+> delivery (media/static assets), authentication, and essential OS
+> infrastructure. Judge only the DNS name; no page content is available.
 
 Mapping into the decision pipeline:
 
-- `block` = `p(noul) >= 0.5`
-- `confidence` = `max(p, 1-p)` — the certainty of the verdict, so a 0.55
-  probability does not clear the default `min_confidence` of 0.6
-- `reason` = the raw probabilities (`noul p=0.867; category=telemetry (0.491)`),
-  never a generated sentence
-- `category` = the `choice` answer, which is what lands in `device_category`
+- `block` = `p >= 0.5`, then the policy (`provider.Policy`) applies
+  `blocking.min_confidence` (0.6) exactly once
+- `confidence` = `max(p, 1-p)` — the certainty of the verdict
+- `reason` = raw probabilities, never a generated sentence
+- `state` is the domain name only. The client IP is deliberately **not** sent: it
+  carries no signal about the domain and measurably perturbs the joint score
+  (`connect.facebook.net` 0.631 with domain-only state vs 0.398 with a client-IP
+  line in the same prompt)
 
-Measured against `https://ollama.com/v1` (2026-10-29, from a German uplink):
-median **555 ms** per domain, max 623 ms, 161–318 input tokens per request.
-With `workers.pool_size: 3` that keeps up with a home network; the DNS path is
-not affected either way.
+**`questions: "tracking_category"`** adds a second, `choice`-type question
+(`telemetry` / `analytics` / `ads` / `benign`). It fills `device_category`, but
+Clef scores all questions in one joint pass, so the extra question shifts the
+tracking probability by up to ±0.44 on borderline names and adds latency. Measured
+on the same 24-domain tracker set: `tracking` blocks 20, `tracking_category`
+blocks 19 — with a different set of misses.
 
-A note on accuracy: the model scores by name only. In a local sample
-`app-measurement.com` (0.867), `ssl.google-analytics.com` (0.982) and
-`metrics.vendor.example` (0.924) blocked correctly, `api.github.com` (0.013),
-`cdn.jsdelivr.net` (0.094) and `update.microsoft.com` (0.183) were left alone,
-but `settings-win.data.microsoft.com` scored only 0.459 while its `category`
-said `telemetry` (0.586) — a false negative. Calibrate `blocking.min_confidence`
-against your own labelled domains before trusting it; `clef-flash:9b` is the
-faster, less accurate variant.
+**Calibration matters more than wording.** Identical requests are deterministic
+(5/5 identical scores), but every change to the payload — wording, sibling
+questions, even a metadata line — changes the numbers. Treat scores in the
+0.2–0.6 band as noise, not as a property of the domain.
+
+Measured against `https://ollama.com/v1` (2026-10-29, German uplink):
+
+| Sample | Result |
+| --- | --- |
+| 24 known tracker domains | 20 blocked, threshold 0.6 |
+| 17 benign controls (jsDelivr, cdnjs, Google Fonts, Netflix, Akamai, PayPal, GitHub, Microsoft 365, Docker, S3, Wikimedia) | 0 blocked; highest score 0.41 (`ajax.googleapis.com`) |
+| Latency | 555 ms median, 623 ms max; 161–330 input tokens |
+
+Known misses with the default prompt: `sc-static.net` (0.14), `secure.quantserve.com`
+(0.14), `snap.licdn.com` (0.20), `s.pinimg.com` (0.20). All sit far below the
+threshold, so they are stable misses rather than noise — add them to
+`provider.heuristic.extra_patterns` if you need them covered.
+
+### ollama
 
 ### ollama
 

@@ -123,6 +123,12 @@ type SystemOneConfig struct {
 	Model     string `yaml:"model"`
 	APIKey    string `yaml:"api_key"`
 	APIKeyEnv string `yaml:"api_key_env"`
+	// Questions selects the request shape. Clef scores every question in one
+	// joint pass, so asking for the category changes the tracking probability:
+	// "tracking" (default) is the measured, well-separated variant;
+	// "tracking_category" also fills device_category, at the cost of noisier
+	// borderline scores.
+	Questions string `yaml:"questions"`
 }
 
 // HeuristicConfig configures the zero-AI fallback provider.
@@ -132,10 +138,11 @@ type HeuristicConfig struct {
 
 // BlockingConfig controls the sinkhole answers and the decision threshold.
 type BlockingConfig struct {
-	IPv4          string  `yaml:"ipv4"`
-	IPv6          string  `yaml:"ipv6"`
-	TTL           uint32  `yaml:"ttl"`
-	MinConfidence float64 `yaml:"min_confidence"`
+	IPv4                   string  `yaml:"ipv4"`
+	IPv6                   string  `yaml:"ipv6"`
+	TTL                    uint32  `yaml:"ttl"`
+	MinConfidence          float64 `yaml:"min_confidence"`
+	CategoryMinProbability float64 `yaml:"category_min_probability"`
 }
 
 // LoggingConfig configures slog.
@@ -184,13 +191,15 @@ func Default() Config {
 				BaseURL:   "https://ollama.com/v1",
 				Model:     "clef:27b",
 				APIKeyEnv: "OLLAMA_API_KEY",
+				Questions: "tracking",
 			},
 		},
 		Blocking: BlockingConfig{
-			IPv4:          "0.0.0.0",
-			IPv6:          "::",
-			TTL:           300,
-			MinConfidence: 0.6,
+			IPv4:                   "0.0.0.0",
+			IPv6:                   "::",
+			TTL:                    300,
+			MinConfidence:          0.6,
+			CategoryMinProbability: 0.7,
 		},
 		Logging: LoggingConfig{Level: "info", Format: "text"},
 	}
@@ -281,6 +290,11 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(c.Provider.SystemOne.Model) == "" {
 			errs = append(errs, errors.New("provider.systemone.model must not be empty"))
 		}
+		switch c.Provider.SystemOne.Questions {
+		case "tracking", "tracking_category":
+		default:
+			errs = append(errs, fmt.Errorf("provider.systemone.questions %q must be tracking or tracking_category", c.Provider.SystemOne.Questions))
+		}
 	default:
 		errs = append(errs, fmt.Errorf("provider.type %q must be one of heuristic, ollama, openai, systemone", c.Provider.Type))
 	}
@@ -298,6 +312,9 @@ func (c Config) Validate() error {
 	}
 	if c.Blocking.MinConfidence < 0 || c.Blocking.MinConfidence > 1 {
 		errs = append(errs, fmt.Errorf("blocking.min_confidence must be within [0,1], got %v", c.Blocking.MinConfidence))
+	}
+	if c.Blocking.CategoryMinProbability < 0 || c.Blocking.CategoryMinProbability > 1 {
+		errs = append(errs, fmt.Errorf("blocking.category_min_probability must be within [0,1], got %v", c.Blocking.CategoryMinProbability))
 	}
 	switch strings.ToLower(c.Logging.Level) {
 	case "debug", "info", "warn", "error":

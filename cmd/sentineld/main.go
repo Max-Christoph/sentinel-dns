@@ -103,15 +103,20 @@ func run() error {
 		}
 	}
 
+	policy := provider.Policy{
+		MinConfidence:          cfg.Blocking.MinConfidence,
+		CategoryMinProbability: cfg.Blocking.CategoryMinProbability,
+	}
 	onResult := func(ctx context.Context, job queue.Job, resp *provider.DecisionResponse) {
-		block := resp.Block && resp.Confidence >= cfg.Blocking.MinConfidence
+		decision := policy.Decide(resp)
+		block, confidence := decision.Block, decision.Confidence
 		now := time.Now().UTC()
 		record := store.Decision{
 			Domain:         job.Domain,
 			DeviceCategory: resp.Category,
 			IsTelemetry:    resp.Block,
 			Blocked:        block,
-			Confidence:     resp.Confidence,
+			Confidence:     confidence,
 			Reasoning:      resp.Reason,
 			ClientIP:       job.ClientIP,
 			CreatedAt:      now,
@@ -126,7 +131,7 @@ func run() error {
 		}
 		entry := dnsserver.Entry{
 			Blocked:     block,
-			Confidence:  resp.Confidence,
+			Confidence:  confidence,
 			Reason:      resp.Reason,
 			Category:    resp.Category,
 			IsTelemetry: resp.Block,
@@ -137,7 +142,8 @@ func run() error {
 			log.Debug("cache full, decision not cached", "domain", job.Domain)
 		}
 		log.Info("classified", "domain", job.Domain, "client_ip", job.ClientIP,
-			"block", block, "confidence", resp.Confidence, "category", resp.Category, "reason", resp.Reason)
+			"block", block, "confidence", confidence, "decided_by", decision.Reason,
+			"category", resp.Category, "reason", resp.Reason)
 	}
 
 	pool, err := queue.New(queue.Options{

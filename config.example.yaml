@@ -60,6 +60,10 @@ provider:
     model: "clef:27b"            # alias "clef:27b-cloud" also works
     api_key: ""                  # prefer api_key_env
     api_key_env: "OLLAMA_API_KEY"
+    # tracking          = one noul question (default, best separation, no category)
+    # tracking_category = adds a choice question; fills device_category but shifts
+    #                     the joint tracking score by up to ±0.44 on borderline names
+    questions: "tracking"
 
   # --- type: openai (OpenAI, Cloudflare Workers AI, vLLM, llama.cpp) ------
   openai:

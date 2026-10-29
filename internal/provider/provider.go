@@ -22,6 +22,9 @@ type DecisionResponse struct {
 	Confidence float64 `json:"confidence"`
 	Reason     string  `json:"reason"`
 	Category   string  `json:"category,omitempty"`
+	// CategoryProb is the probability the backend assigned to Category itself
+	// (0 when the backend cannot quantify it).
+	CategoryProb float64 `json:"category_probability,omitempty"`
 }
 
 // DecisionProvider classifies a domain. Implementations must honour the
