@@ -8,6 +8,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -26,6 +27,7 @@ type Options struct {
 	IPv6           net.IP
 	TTL            uint32
 	ForwardTimeout time.Duration
+	Allowlist      []string
 	Logger         *slog.Logger
 }
 
@@ -38,6 +40,7 @@ type Server struct {
 	ipv6           net.IP
 	ttl            uint32
 	forwardTimeout time.Duration
+	allowlist      []string
 	log            *slog.Logger
 
 	queries          atomic.Uint64
@@ -47,6 +50,7 @@ type Server struct {
 	enqueued         atomic.Uint64
 	enqueueRejected  atomic.Uint64
 	writeErrors      atomic.Uint64
+	allowlisted      atomic.Uint64
 }
 
 // Snapshot is a consistent-ish view of the DNS counters.
@@ -58,6 +62,7 @@ type Snapshot struct {
 	Enqueued         uint64 `json:"enqueued"`
 	EnqueueRejected  uint64 `json:"enqueue_rejected"`
 	WriteErrors      uint64 `json:"write_errors"`
+	Allowlisted      uint64 `json:"allowlisted"`
 }
 
 // New validates the wiring and returns the handler.
@@ -83,7 +88,14 @@ func New(opts Options) (*Server, error) {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
+	allow := make([]string, 0, len(opts.Allowlist))
+	for _, entry := range opts.Allowlist {
+		if normalized := NormalizeName(entry); normalized != "" {
+			allow = append(allow, normalized)
+		}
+	}
 	return &Server{
+		allowlist:      allow,
 		cache:          opts.Cache,
 		forwarder:      opts.Forwarder,
 		submit:         opts.Submit,
@@ -107,6 +119,13 @@ func (s *Server) ServeDNS(w mdns.ResponseWriter, req *mdns.Msg) {
 
 	onlyAddress := q.Qclass == mdns.ClassINET && (q.Qtype == mdns.TypeA || q.Qtype == mdns.TypeAAAA)
 	if domain == "" || !onlyAddress {
+		s.forward(w, req)
+		return
+	}
+
+	// Infrastructure is never sinkholed, regardless of what the model said.
+	if s.isAllowlisted(domain) {
+		s.allowlisted.Add(1)
 		s.forward(w, req)
 		return
 	}
@@ -188,6 +207,17 @@ func (s *Server) write(w mdns.ResponseWriter, req *mdns.Msg, resp *mdns.Msg) {
 	}
 }
 
+// isAllowlisted reports whether the name matches an allowlist entry exactly or
+// as a subdomain.
+func (s *Server) isAllowlisted(domain string) bool {
+	for _, entry := range s.allowlist {
+		if domain == entry || strings.HasSuffix(domain, "."+entry) {
+			return true
+		}
+	}
+	return false
+}
+
 // Stats returns the DNS path counters.
 func (s *Server) Stats() Snapshot {
 	return Snapshot{
@@ -198,6 +228,7 @@ func (s *Server) Stats() Snapshot {
 		Enqueued:         s.enqueued.Load(),
 		EnqueueRejected:  s.enqueueRejected.Load(),
 		WriteErrors:      s.writeErrors.Load(),
+		Allowlisted:      s.allowlisted.Load(),
 	}
 }
 

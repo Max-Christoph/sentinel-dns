@@ -224,6 +224,7 @@ func run() error {
 		IPv6:           net.ParseIP(cfg.Blocking.IPv6),
 		TTL:            cfg.Blocking.TTL,
 		ForwardTimeout: cfg.Upstream.Timeout.Std()*time.Duration(len(cfg.Upstream.Addresses)) + time.Second,
+		Allowlist:      cfg.Blocking.Allowlist,
 		Logger:         log,
 	})
 	if err != nil {

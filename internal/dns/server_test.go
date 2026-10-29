@@ -223,6 +223,47 @@ func TestUpstreamFailureReturnsServfail(t *testing.T) {
 	}
 }
 
+func TestAllowlistedDomainsAreNeverSinkholed(t *testing.T) {
+	t.Parallel()
+	cache := NewCache(10)
+	cache.Put("signaler-pa.clients6.google.com", Entry{Blocked: true, Expires: time.Now().Add(time.Minute)})
+
+	fwd := &stubForwarder{}
+	recorder := &submitRecorder{}
+	srv, err := New(Options{
+		Cache: cache, Forwarder: fwd, Submit: recorder.submit,
+		IPv4: net.ParseIP("0.0.0.0"), IPv6: net.ParseIP("::"), TTL: 300,
+		ForwardTimeout: time.Second, Allowlist: []string{"google.com", "msftncsi.com"},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	w := &captureWriter{remote: &net.UDPAddr{IP: net.ParseIP("10.0.0.7"), Port: 5555}}
+	srv.ServeDNS(w, query("signaler-pa.clients6.google.com", mdns.TypeA))
+	if fwd.callCount() != 1 {
+		t.Fatalf("allowlisted domain was not forwarded (calls=%d)", fwd.callCount())
+	}
+	if w.msg == nil || len(w.msg.Answer) != 0 {
+		t.Fatalf("allowlisted domain got a sinkhole answer: %+v", w.msg)
+	}
+	if domains, _ := recorder.snapshot(); len(domains) != 0 {
+		t.Fatalf("allowlisted domain was enqueued for classification: %v", domains)
+	}
+	if srv.Stats().Allowlisted != 1 {
+		t.Errorf("allowlisted counter = %d, want 1", srv.Stats().Allowlisted)
+	}
+
+	// A name that only looks similar must still be cache-checked.
+	w2 := &captureWriter{remote: &net.UDPAddr{IP: net.ParseIP("10.0.0.7"), Port: 5555}}
+	cache.Put("notgoogle.com.example", Entry{Blocked: true, Expires: time.Now().Add(time.Minute)})
+	srv.ServeDNS(w2, query("notgoogle.com.example", mdns.TypeA))
+	if w2.msg == nil || len(w2.msg.Answer) != 1 {
+		t.Fatalf("non-allowlisted domain was not sinkholed: %+v", w2.msg)
+	}
+}
+
 func TestNonAddressQueriesAreForwardedEvenWhenBlocked(t *testing.T) {
 	t.Parallel()
 	cache := NewCache(10)

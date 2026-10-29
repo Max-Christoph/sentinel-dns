@@ -112,6 +112,7 @@ Every key is optional; omitted keys keep the default below.
 | `logging.level` / `logging.format` | `info` / `text` | `debug`,`info`,`warn`,`error`; `text`,`json` |
 | `provider.type` | `heuristic` | `heuristic`, `ollama`, `openai`, `systemone` |
 | `blocking.category_min_probability` | `0.7` | a confident category label may block even when the yes/no question hesitates |
+| `blocking.allowlist` | vendor infrastructure (Google, Microsoft NCSI, captive portals, OCSP) | exact name or subdomain, never sinkholed |
 | `provider.systemone.enrich_category` | `true` | second, category-only call for blocked domains (systemone, `questions: tracking`) |
 | `provider.timeout` | `20s` | HTTP client timeout |
 
@@ -415,6 +416,20 @@ sqlite3 /var/lib/sentinel-dns/sentinel.db \
 Housekeeping: run `sentineld -config ... -prune-days 90` from a weekly timer, or
 delete rows manually. Without pruning the table grows with every unique domain
 that was ever looked up.
+
+### Allowlist
+
+Some domains must never be sinkholed, whatever the model says: Google's
+`signaler-pa.clients6.google.com` scored 0.604 once and broke Google apps, and a
+blocked NCSI probe makes Windows claim "no internet" while browsing still works.
+`blocking.allowlist` is checked in the DNS handler **before** the cache, so an
+allowlisted name is always forwarded and never classified — existing blocked
+rows for those names are ignored, not repaired.
+
+Entries match exactly and as subdomains (`google.com` covers
+`gemini.google.com`, but not `google-analytics.com`). The default list covers
+Google core, Microsoft NCSI and update endpoints, captive-portal probes and two
+OCSP responders. Add to it rather than lowering `min_confidence`.
 
 ## Security notes
 

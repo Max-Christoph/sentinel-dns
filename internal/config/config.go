@@ -147,6 +147,11 @@ type BlockingConfig struct {
 	TTL                    uint32  `yaml:"ttl"`
 	MinConfidence          float64 `yaml:"min_confidence"`
 	CategoryMinProbability float64 `yaml:"category_min_probability"`
+	// Allowlist entries are never sinkholed: exact names or suffix matches
+	// ("google.com" covers "gemini.google.com"). Critical infrastructure goes
+	// here because a false positive on a core endpoint looks like a broken
+	// internet connection, not like a blocked tracker.
+	Allowlist []string `yaml:"allowlist"`
 }
 
 // LoggingConfig configures slog.
@@ -205,6 +210,14 @@ func Default() Config {
 			TTL:                    300,
 			MinConfidence:          0.6,
 			CategoryMinProbability: 0.7,
+			Allowlist: []string{
+				"google.com", "gstatic.com", "googleapis.com", "googleusercontent.com",
+				"googlevideo.com", "gvt1.com",
+				"msftncsi.com", "msftconnecttest.com", "windowsupdate.com",
+				"captive.apple.com", "detectportal.firefox.com",
+				"connectivitycheck.gstatic.com", "connectivitycheck.android.com",
+				"ocsp.digicert.com", "ocsp.sectigo.com",
+			},
 		},
 		Logging: LoggingConfig{Level: "info", Format: "text"},
 	}

@@ -32,6 +32,24 @@ blocking:
   ipv6: "::"
   ttl: 300               # TTL of the sinkhole answer (seconds)
   min_confidence: 0.6    # a provider verdict blocks only at or above this value
+  # Never sinkholed, exact name or subdomain. A false positive on a core
+  # endpoint looks like a broken internet connection, not like a blocked tracker.
+  allowlist:
+    - "google.com"
+    - "gstatic.com"
+    - "googleapis.com"
+    - "googleusercontent.com"
+    - "googlevideo.com"
+    - "gvt1.com"
+    - "msftncsi.com"
+    - "msftconnecttest.com"
+    - "windowsupdate.com"
+    - "captive.apple.com"
+    - "detectportal.firefox.com"
+    - "connectivitycheck.gstatic.com"
+    - "connectivitycheck.android.com"
+    - "ocsp.digicert.com"
+    - "ocsp.sectigo.com"
 
 logging:
   level: "info"          # debug | info | warn | error
