@@ -22,7 +22,7 @@ import (
 // questions in one forward pass instead of generating text, so the verdict is
 // a probability, not a parsed sentence.
 type SystemOneProvider struct {
-	baseURL   string
+	endpoint  string
 	model     string
 	apiKey    string
 	client    *http.Client
@@ -78,6 +78,12 @@ func NewSystemOne(cfg config.SystemOneConfig, timeout time.Duration, log *slog.L
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, errors.New("systemone: model must not be empty")
 	}
+	// Accept both the API root ("https://ollama.com/v1") and the full endpoint
+	// ("https://ollama.com/v1/systemone").
+	endpoint := baseURL
+	if !strings.HasSuffix(endpoint, "/systemone") {
+		endpoint += "/systemone"
+	}
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if apiKey == "" && strings.TrimSpace(cfg.APIKeyEnv) != "" {
 		apiKey = strings.TrimSpace(os.Getenv(cfg.APIKeyEnv))
@@ -89,11 +95,11 @@ func NewSystemOne(cfg config.SystemOneConfig, timeout time.Duration, log *slog.L
 		log = slog.Default()
 	}
 	return &SystemOneProvider{
-		baseURL: baseURL,
-		model:   cfg.Model,
-		apiKey:  apiKey,
-		client:  &http.Client{Timeout: timeout},
-		log:     log,
+		endpoint: endpoint,
+		model:    cfg.Model,
+		apiKey:   apiKey,
+		client:   &http.Client{Timeout: timeout},
+		log:      log,
 		questions: map[string]systemOneQuestion{
 			trackingQuestion: {
 				Type: "noul",
@@ -138,7 +144,7 @@ func (s *SystemOneProvider) Classify(ctx context.Context, req DecisionRequest) (
 		return nil, fmt.Errorf("systemone: encode request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.baseURL+"/systemone", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("systemone: build request: %w", err)
 	}

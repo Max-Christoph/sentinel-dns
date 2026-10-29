@@ -160,7 +160,10 @@ provider:
   type: systemone
   timeout: 20s
   systemone:
-    base_url: "https://ollama.com/v1"   # or http://127.0.0.1:11434 for local Ollama >= 0.35
+    # API root or the full endpoint, both work:
+    #   https://ollama.com/v1  or  https://ollama.com/v1/systemone
+    #   http://127.0.0.1:11434/v1 for a local Ollama >= 0.35
+    base_url: "https://ollama.com/v1/systemone"
     model: "clef:27b"                  # alias "clef:27b-cloud" also works
     api_key_env: "OLLAMA_API_KEY"
 ```

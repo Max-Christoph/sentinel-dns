@@ -191,6 +191,31 @@ func TestSystemOneHonoursTimeout(t *testing.T) {
 	}
 }
 
+func TestSystemOneAcceptsFullEndpoint(t *testing.T) {
+	t.Parallel()
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = io.WriteString(w, `{"answers":{"tracking":{"type":"noul","noul":0.9},"category":{"type":"choice","choice":"telemetry"}}}`)
+	}))
+	defer srv.Close()
+
+	p, err := NewSystemOne(config.SystemOneConfig{
+		BaseURL: srv.URL + "/v1/systemone",
+		Model:   "clef:27b",
+		APIKey:  "test-key",
+	}, time.Second, discardLogger())
+	if err != nil {
+		t.Fatalf("NewSystemOne: %v", err)
+	}
+	if _, err := p.Classify(context.Background(), DecisionRequest{Domain: "x.example"}); err != nil {
+		t.Fatalf("Classify: %v", err)
+	}
+	if gotPath != "/v1/systemone" {
+		t.Fatalf("path = %q, want /v1/systemone (no doubled suffix)", gotPath)
+	}
+}
+
 func TestNewSystemOneRequiresKeyAndURL(t *testing.T) {
 	t.Setenv("SENTINEL_ONLINE_KEY", "")
 	if _, err := NewSystemOne(config.SystemOneConfig{BaseURL: "https://ollama.com/v1", Model: "clef:27b", APIKeyEnv: "SENTINEL_ONLINE_KEY"}, time.Second, nil); err == nil {

@@ -56,7 +56,7 @@ provider:
   # Clef is not a chat model: it answers typed questions on /v1/systemone and
   # returns probabilities. Works against Ollama Cloud or a local Ollama >= 0.35.
   systemone:
-    base_url: "https://ollama.com/v1"
+    base_url: "https://ollama.com/v1/systemone"   # or just "https://ollama.com/v1"
     model: "clef:27b"            # alias "clef:27b-cloud" also works
     api_key: ""                  # prefer api_key_env
     api_key_env: "OLLAMA_API_KEY"
